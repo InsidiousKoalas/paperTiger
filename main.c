@@ -9,6 +9,7 @@
 
 int sample, sampFlag, ndx;
 unsigned long int avg;
+volatile char eosFlag = 0;
 
 
 int main(void) {
@@ -21,7 +22,7 @@ int main(void) {
 //    P3DIR |= 0x03;		// Set P6.0 & P6.1 as outs
 //    P3DIR &= ~0xFC;		// init other pins as ins
 //
-    int i, sListFlag, coms[3] = {0x76, 0x00, 0x17};
+    volatile int i, sListFlag, coms[3] = {0x76, 0x00, 0x17};
 //    sListFlag = ledInit(coms);
 //    if(sListFlag)(P1OUT |= BIT0);	// indicate error
 //    else(P1OUT &= ~BIT0);
@@ -66,20 +67,21 @@ int main(void) {
  */
 
     TA0CCTL0 = CCIE;
-    TA0CCR0 = 5000;
+    TA0CCR0 = 50;
     TA0CTL = TASSEL_2 + MC_1;	// SMCLK, upmode
 
 /*
  *  ----------------   UART initialization  --------------------------
  */
-    P3SEL |= BIT3+BIT4;                       // P3.3,4 = USCI_A0 TXD/RXD
-    UCA0CTL1 |= UCSWRST;                      // **Put state machine in reset**
-    UCA0CTL1 |= UCSSEL_2;                     // SMCLK
-    UCA0BR0 = 9;                              // 1MHz 115200 (see User's Guide)
-    UCA0BR1 = 0;                              // 1MHz 115200
-    UCA0MCTL |= UCBRS_1 + UCBRF_0;            // Modulation UCBRSx=1, UCBRFx=0
-    UCA0CTL1 &= ~UCSWRST;                     // **Initialize USCI state machine**
-    UCA0IE |= UCRXIE;                         // Enable USCI_A0 RX interrupt
+    P4SEL |= BIT4|BIT5;                       // P3.3,4 = USCI_A0 TXD/RXD
+    UCA1CTL1 |= UCSWRST;                      // **Put state machine in reset**
+    UCA1CTL1 |= UCSSEL_2;                     // SMCLK
+    UCA1BR0 = 9;                              // 1MHz 115200 (see User's Guide)
+    UCA1BR1 = 0;                              // 1MHz 115200
+    UCA1MCTL |= UCBRS_1 + UCBRF_0;            // Modulation UCBRSx=1, UCBRFx=0
+    UCA1CTL1 &= ~UCSWRST;                     // **Initialize USCI state machine**
+    UCA1IE |= UCRXIE;                         // Enable USCI_A0 RX interrupt
+
 
 /*
  * 	----------------   Other initialization --------------------------
@@ -101,18 +103,23 @@ int main(void) {
     		ndx++;						// index for next sample
     		if(ndx>NUM_SAMPS)(ndx=0);
 
+//
+//    		for(i=0;i<2;i++){
+//    			UCA1TXBUF = (sampAry[ndx]&0xFF00)+'0';
+//    			sampAry[ndx]<<=1;
+//    		}
+    		UCA1TXBUF = 'R';
+    		UCA1TXBUF = '\n';
+    		UCA1TXBUF = '\r';
 
-    		for(i=0;i<2;i++){
-    			UCA0TXBUF = (sampAry[ndx]&0xFF00)+'0';
-    			sampAry[ndx]<<=1;
-    		}
-    		UCA0TXBUF = '\r';
-    		UCA0TXBUF = '\n';
 
 //    		P4OUT ^= BIT7;		// test if running
-    		TA0CCTL0 = CCIE;	// restart interrupts
+//    		TA0CCTL0 = CCIE;	// restart interrupts
 //    		__bis_SR_register(GIE);		// reenable globals
 
+    		while (!(UCA1IFG&UCTXIFG));
+    		TA0CCTL0 |= CCIE;
+//    		eosFlag &= 0x01;	// set End of String flag
     		sampFlag = 0;	// clear sample flag
     	}
 
@@ -147,10 +154,10 @@ __interrupt void Timer_A (void)
 }
 
 // Echo back RXed character, confirm TX buffer is ready first
-#pragma vector=USCI_A0_VECTOR
-__interrupt void USCI_A0_ISR(void)
+#pragma vector=USCI_A1_VECTOR
+__interrupt void USCI_A1_ISR(void)
 {
-  switch(__even_in_range(UCA0IV,4))
+  switch(__even_in_range(UCA1IV,4))
   {
   case 0:break;                             // Vector 0 - no interrupt
   case 2:break;                               // Vector 2 - RXIFG
@@ -158,12 +165,18 @@ __interrupt void USCI_A0_ISR(void)
 //    UCA0TXBUF = UCA0RXBUF;                  // TX -> RXed character
 //    break;
   case 4:									  // Vector 4 - TXIFG
-	  __bic_SR_register(GIE);
-	  while(UCA0TXBUF&UCBUSY);
-	  __bis_SR_register_on_exit(GIE);
+
+
+	  while (!(UCA1IFG&UCTXIFG));
+//	  __bic_SR_register(GIE);
+//	  __bic_SR_register(CPUOFF);
+//	  __bis_SR_register_on_exit(GIE);
+//	  if(eosFlag&0x01 == 1){
+//		  TA0CCTL0 |= CCIE;			//
+//		  eosFlag ^= 0x01;				// clr eosFlag
+//	  }
 	  break;
 
   default: break;
   }
 }
-
