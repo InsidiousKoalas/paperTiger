@@ -7,42 +7,66 @@
  */
 #define NUM_SAMPS	1024
 
-int sample, sampFlag, ndx;
+
+unsigned int *findFreq(int*, unsigned int);
+
+int sample, sampFlag, pushData, ndx;
 unsigned long int avg;
 volatile char eosFlag = 0;
+
+/*
+ * Algorithm:
+ *
+ *
+ * 		A1:		Trigger timer interrupt (25 kHz)
+ * 					- Start ADC Conversion
+ * 					- Toggle indicator LED
+ * 					- Set sample flag
+ * 					- Turn off CPU for remained of ADC conversion
+ *
+ * 		A2:		ADC interrupt
+ * 					- write ADC12MEM to sample
+ * 		A3:		Main loop
+ * 					- if(sampFlag == 1) then
+ * 						=> sampAry[ndx] = sample
+ * 						=> if(ndx == end of array) then
+ * 							- disable all interrupts
+ * 							- f = find_freq();
+ * 							- ndx = 0;
+ * 							- reenable UART interrupt
+ * 							- print note over UART
+ * 		A4: 	find_freq()
+ * 					- avg(sampAry)
+ * 					- sampAry = sampAry - avg
+ * 					- make bitstream arry
+ * 						=> if(sampAry[i] >= 0) then
+ * 							- streamAry[i] = 1;
+ * 						=>	else
+ * 							- streamAry[i] = 0;
+ * 					- Autocorrelate bistream arry
+ * 						=>
+ *
+ *
+ *
+ */
+
 
 
 int main(void) {
     WDTCTL = WDTPW | WDTHOLD;	// Stop watchdog timer
 
 /*
- * 	-----------------	LED board initialization  ------------------------
+ * 	-----------------	Variable and Pin initialization  ------------------------
  */
 
-//    P3DIR |= 0x03;		// Set P6.0 & P6.1 as outs
-//    P3DIR &= ~0xFC;		// init other pins as ins
-//
-    volatile int i, sListFlag, coms[3] = {0x76, 0x00, 0x17};
-//    sListFlag = ledInit(coms);
-//    if(sListFlag)(P1OUT |= BIT0);	// indicate error
-//    else(P1OUT &= ~BIT0);
+
+    volatile int i, j,sListFlag, coms[3] = {0x76, 0x00, 0x17};
 
 
-    // initialize display to dashes
-//    int disp[4];
-//    disp[0] = 0x81;
-//    disp[1] = 0x81;
-//    disp[2] = 0x81;
-//    disp[3] = 0x81;
-//
-//    ledWrite(0x76,disp);
-//    __delay_cycles(0xffff);
-//
-//    for(i=0; i<4; i++){
-//    	disp[i] = 0x80;
-//    }
-//
-//    ledWrite(0x76,disp);
+    // Button to push data to computer
+    P1DIR &= ~BIT1;
+    P1REN |= BIT1;
+    P1OUT |= BIT1;
 
 
 /*
@@ -58,7 +82,7 @@ int main(void) {
     P1DIR |= BIT0;
 
 
-
+    // test ADC
 //    ADC12CTL0 |= ADC12SC;
 //    __bis_SR_register(GIE);        // LPM0 with interrupts enabled (CPUOFF waits for ADC)
 
@@ -66,8 +90,11 @@ int main(void) {
  * 	-----------------	Timer initialization  ------------------------
  */
 
-    TA0CCTL0 = CCIE;
-    TA0CCR0 = 50;
+//    TA0CCTL0 = CCIE;
+    TA0CCR0 = 40;
+
+    unsigned int fs = 1000/TA0CCR0*1000;
+
     TA0CTL = TASSEL_2 + MC_1;	// SMCLK, upmode
 
 /*
@@ -80,18 +107,38 @@ int main(void) {
     UCA1BR1 = 0;                              // 1MHz 115200
     UCA1MCTL |= UCBRS_1 + UCBRF_0;            // Modulation UCBRSx=1, UCBRFx=0
     UCA1CTL1 &= ~UCSWRST;                     // **Initialize USCI state machine**
-    UCA1IE |= UCRXIE;                         // Enable USCI_A0 RX interrupt
+    UCA1IE |= UCRXIE;                         // Enable USCI_A0 TX interrupt
+
+
+    // send init over UART
+    UCA1TXBUF = 'o';
+    __delay_cycles(0xFFF);
+    UCA1TXBUF = 'n';
+    __delay_cycles(0xFFF);
+    UCA1TXBUF = '\r';
+    __delay_cycles(0xFFF);
+    UCA1TXBUF = '\n';
+    __delay_cycles(0xFFF);
+    UCA1TXBUF = '\r';
+    __delay_cycles(0xFFF);
+    UCA1TXBUF = '\n';
+    unsigned char tx[4];
 
 
 /*
  * 	----------------   Other initialization --------------------------
  */
 
-    unsigned int sampAry[NUM_SAMPS] = {0};
+    int sampAry[NUM_SAMPS] = {0};
 //    unsigned int avg=0;
     P4DIR |= BIT7;
+
+    TA0CCTL0 = CCIE;
     __bis_SR_register(GIE);        // enable interrupts
 
+
+    unsigned int *streamPtr;
+    float freq;
 
 
     while(1){
@@ -101,26 +148,85 @@ int main(void) {
 
     		sampAry[ndx] = sample;		// copy sample val into array
     		ndx++;						// index for next sample
-    		if(ndx>NUM_SAMPS)(ndx=0);
+    		if(ndx>NUM_SAMPS){
+    			streamPtr = findFreq(sampAry, fs);
 
-//
-//    		for(i=0;i<2;i++){
-//    			UCA1TXBUF = (sampAry[ndx]&0xFF00)+'0';
-//    			sampAry[ndx]<<=1;
-//    		}
-    		UCA1TXBUF = 'R';
-    		UCA1TXBUF = '\n';
-    		UCA1TXBUF = '\r';
+//    			for(i=0; i<64; i++){
+//    				for(j=0; j<16; j++){
+//    					UCA1TXBUF = streamPtr[i]&0x01+'0';
+////    					UCA1TXBUF = 'g';
+//    					streamPtr[i] >>= 0x01;
+//    					__delay_cycles(0xFFF);
+//    					UCA1TXBUF = '\r';
+//    					__delay_cycles(0xFFF);
+//    					UCA1TXBUF = '\n';
+//    					__delay_cycles(0xFFF);
+//    				}
+//    			}
 
+    		}
 
-//    		P4OUT ^= BIT7;		// test if running
-//    		TA0CCTL0 = CCIE;	// restart interrupts
-//    		__bis_SR_register(GIE);		// reenable globals
+    		P4OUT ^= BIT7;		// test if running
 
-    		while (!(UCA1IFG&UCTXIFG));
+    		__bis_SR_register(GIE);		// reenable globals
     		TA0CCTL0 |= CCIE;
-//    		eosFlag &= 0x01;	// set End of String flag
+//    		eosFlag = 1;
     		sampFlag = 0;	// clear sample flag
+    	}
+
+
+
+
+
+
+    	// TX data
+    	if(!(P1IN & BIT1)){
+    		TA0CCTL0 &= ~CCIE;
+    		__bic_SR_register(GIE);
+    		UCA1IE |= UCRXIE;
+
+
+    		for(i=ndx+1; i != ndx; i++){
+    			if(i>=NUM_SAMPS)(i=0);
+
+    			tx[3] = (sampAry[i]%10)+'0';
+    			sampAry[i] /= 10;
+    			tx[2] = (sampAry[i]%10)+'0';
+    			sampAry[i] /= 10;
+    			tx[1] = (sampAry[i]%10)+'0';
+    			sampAry[i] /= 10;
+    			tx[0] = (sampAry[i]%10)+'0';
+
+    			for(j=0;j<4;j++){
+    				UCA1TXBUF = tx[j];
+    				__delay_cycles(0xFFF);
+    			}
+
+
+    			UCA1TXBUF = '\r';
+    			__delay_cycles(0xFFF);
+    			UCA1TXBUF = '\n';
+    			__delay_cycles(0xFFF);
+
+    		}
+
+    		pushData = 0;
+    		UCA1TXBUF = '\r';
+    		__delay_cycles(0xFFF);
+    		UCA1TXBUF = '\n';
+    		__delay_cycles(0xFFF);
+    		UCA1TXBUF = '\r';
+    		__delay_cycles(0xFFF);
+    		UCA1TXBUF = '\n';
+
+//    		for(i=0; i<(8*sizeof(int)); i++){
+//    			UCA1TXBUF = *()
+//    		}
+//
+//    		eosFlag = 0;
+
+    		TA0CCTL0 |= CCIE;
+    		__bis_SR_register(GIE);
     	}
 
 
@@ -157,26 +263,98 @@ __interrupt void Timer_A (void)
 #pragma vector=USCI_A1_VECTOR
 __interrupt void USCI_A1_ISR(void)
 {
-  switch(__even_in_range(UCA1IV,4))
-  {
-  case 0:break;                             // Vector 0 - no interrupt
-  case 2:break;                               // Vector 2 - RXIFG
-//    while (!(UCA0IFG&UCTXIFG));             // USCI_A0 TX buffer ready?
-//    UCA0TXBUF = UCA0RXBUF;                  // TX -> RXed character
-//    break;
-  case 4:									  // Vector 4 - TXIFG
-
-
-	  while (!(UCA1IFG&UCTXIFG));
-//	  __bic_SR_register(GIE);
-//	  __bic_SR_register(CPUOFF);
-//	  __bis_SR_register_on_exit(GIE);
-//	  if(eosFlag&0x01 == 1){
-//		  TA0CCTL0 |= CCIE;			//
-//		  eosFlag ^= 0x01;				// clr eosFlag
-//	  }
-	  break;
-
-  default: break;
-  }
+	while(!(UCA1IFG & UCTXIFG));		// wait for TX buffer
 }
+
+
+
+/*
+ * 		A4: 	find_freq()
+ * 					- avg(sampAry)
+ * 					- sampAry = sampAry - avg
+ * 					- make bitstream arry
+ * 						=> if(sampAry[i] >= 0) then
+ * 							- streamAry[i] = 1;
+ * 						=>	else
+ * 							- streamAry[i] = 0;
+ * 					- Autocorrelate bistream arry
+ * 						=>
+ */
+
+unsigned int* findFreq(int* sampAry, unsigned int fs){
+	int i,j,sizeInt, leng;
+
+	sizeInt = 8*sizeof(int);
+
+	leng = NUM_SAMPS/(sizeInt);
+
+	unsigned int stream[64];
+	int avg = 2047;			// assumes microphone is in middle (may need adjustment)
+
+
+	// store stream as int array for later XOR
+	for(i=0; i<leng; i++){
+		// store each bit
+		for(j=0; j<sizeInt; j++){
+			stream[i]<<=1;
+			if((sampAry[i+j]-avg)>=0){
+				stream[i] |= 0x01;		// modify only LSB
+			}
+			else{
+				stream[i] &= ~0x01;		// modify only LSB
+			}
+		}
+	}
+
+	// autocorrelate
+	int acorr[NUM_SAMPS] = {0};
+	int indices = 0;
+
+	// for every possible shift
+	for(j=0;j<1024; j++){
+		indices = j/sizeInt
+
+		// pass in only necessary number of ints
+		for(i=0; i<indices; i++){
+			one = stream[i] ^ stream[NUM_SAMPS];
+			sum =
+			aCorr[j] =
+
+		}
+	}
+
+
+	return stream;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
